@@ -15,13 +15,25 @@ class NotificationService {
       _plugin.resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin>();
 
+  IOSFlutterLocalNotificationsPlugin? get _ios =>
+      _plugin.resolvePlatformSpecificImplementation<
+          IOSFlutterLocalNotificationsPlugin>();
+
   Future<void> init() async {
     tzdata.initializeTimeZones();
     _useDeviceTimeZone();
 
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
+    // Permissions are requested later, when the person sets a reminder, so
+    // all three request flags stay false here.
+    const ios = DarwinInitializationSettings(
+      requestAlertPermission: false,
+      requestBadgePermission: false,
+      requestSoundPermission: false,
+    );
+
     await _plugin.initialize(
-      const InitializationSettings(android: android),
+      const InitializationSettings(android: android, iOS: ios),
     );
   }
 
@@ -44,8 +56,13 @@ class NotificationService {
   }
 
   /// True if the app may post notifications right now.
+  ///
+  /// Only Android reports this reliably; iOS returns true so the warning
+  /// banner doesn't cry wolf there.
   Future<bool> areEnabled() async {
-    return await _android?.areNotificationsEnabled() ?? true;
+    final android = _android;
+    if (android == null) return true;
+    return await android.areNotificationsEnabled() ?? true;
   }
 
   /// Asks for notification permission, but only if it isn't already granted.
@@ -53,10 +70,22 @@ class NotificationService {
   /// the manifest is not enough, which is why reminders never appeared.
   Future<bool> ensurePermission() async {
     final android = _android;
-    if (android == null) return true;
+    if (android != null) {
+      if (await android.areNotificationsEnabled() ?? false) return true;
+      return await android.requestNotificationsPermission() ?? false;
+    }
 
-    if (await android.areNotificationsEnabled() ?? false) return true;
-    return await android.requestNotificationsPermission() ?? false;
+    final ios = _ios;
+    if (ios != null) {
+      return await ios.requestPermissions(
+            alert: true,
+            badge: true,
+            sound: true,
+          ) ??
+          false;
+    }
+
+    return true;
   }
 
   Future<void> scheduleDailyNotification({
@@ -77,6 +106,11 @@ class NotificationService {
           channelDescription: 'Daily reminders for your habits',
           importance: Importance.max,
           priority: Priority.high,
+        ),
+        iOS: DarwinNotificationDetails(
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
         ),
       ),
       // Inexact is the right mode for a daily nudge: it survives Doze, needs no
